@@ -13,16 +13,18 @@
 # between (config-schema bumps, venv layout changes, dependency floors).
 #
 # Usage:
-#   scripts/sandbox/pick-release-tags.sh [--count N] [--repo DIR]
+#   scripts/sandbox/pick-release-tags.sh [--count N] [--repo DIR] [--remote URL]
 #
 #   --count   how many tags to emit (default 5, minimum 1). Fewer tags than
 #             requested emits all of them.
 #   --repo    repository to read tags from (default: this checkout).
+#   --remote  repository URL to read tags from instead of the local checkout.
 #
-# Reads tags from the local checkout, so it needs one fetched with tags
-# (actions/checkout with fetch-depth: 0, or `fetch-tags: true`). A shallow
+# By default, reads tags from the local checkout, so it needs one fetched with
+# tags (actions/checkout with fetch-depth: 0, or `fetch-tags: true`). A shallow
 # checkout has no tags and this exits non-zero rather than silently emitting an
-# empty matrix.
+# empty matrix. `--remote` is useful for forks that test upstream releases but
+# do not maintain their own release tags.
 #
 # Only vYYYY.M.D[.N] release tags are considered; the repo also carries
 # backup/* and one-off tags that are not releases.
@@ -34,6 +36,7 @@ COUNT=5
 # path so a symlinked or copied script still reads the checkout it lives in
 # rather than whatever repo the caller happens to be standing in.
 REPO=""
+REMOTE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --count)
@@ -42,6 +45,9 @@ while [ "$#" -gt 0 ]; do
     --repo)
       [ "$#" -ge 2 ] || { echo 'error: --repo needs a value' >&2; exit 1; }
       REPO="$2"; shift 2 ;;
+    --remote)
+      [ "$#" -ge 2 ] || { echo 'error: --remote needs a value' >&2; exit 1; }
+      REMOTE="$2"; shift 2 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -66,17 +72,34 @@ fi
 
 # sort -V orders v2026.4.8 before v2026.4.13 (numeric), which a plain
 # lexicographic sort gets wrong.
-mapfile -t tags < <(
-  git -C "$REPO" tag --list 'v*' \
-    | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$' \
-    | sort -V
-)
+if [ -n "$REMOTE" ]; then
+  remote_refs="$(git ls-remote --tags "$REMOTE" 'refs/tags/v*')" || {
+    echo "error: could not read release tags from $REMOTE" >&2
+    exit 1
+  }
+  mapfile -t tags < <(
+    printf '%s\n' "$remote_refs" \
+      | awk '$2 !~ /\^\{\}$/ {sub("refs/tags/", "", $2); print $2}' \
+      | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+      | sort -V
+  )
+else
+  mapfile -t tags < <(
+    git -C "$REPO" tag --list 'v*' \
+      | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+      | sort -V
+  )
+fi
 
 total="${#tags[@]}"
 if [ "$total" -eq 0 ]; then
-  echo "error: no release tags found in $REPO" >&2
-  echo '       A shallow clone has no tags: fetch with tags (actions/checkout' >&2
-  echo '       with fetch-depth: 0, or fetch-tags: true).' >&2
+  if [ -n "$REMOTE" ]; then
+    echo "error: no release tags found in $REMOTE" >&2
+  else
+    echo "error: no release tags found in $REPO" >&2
+    echo '       A shallow clone has no tags: fetch with tags (actions/checkout' >&2
+    echo '       with fetch-depth: 0, or fetch-tags: true).' >&2
+  fi
   exit 1
 fi
 
