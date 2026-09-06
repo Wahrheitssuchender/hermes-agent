@@ -7,7 +7,7 @@ name: Install & Update E2E
 # scripts/dev-sandbox.sh, then applies one update route and requires the
 # checkout to land on this commit with a working `hermes`.
 #
-# The starting versions are chosen at runtime from the repo's release tags
+# The starting versions are chosen at runtime from the upstream release tags
 # (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a spread between.
 # A hardcoded list would stop covering the newest release the day after it
 # ships, and would pin an "oldest" that nobody still runs.
@@ -63,19 +63,20 @@ jobs:
     outputs:
       tags: ${{ steps.pick.outputs.tags }}
     steps:
-      # This job only reads tag names and runs one script, so take the cheap
-      # checkout: no blobs (filter), no other files (sparse), but DO fetch tags
-      # -- they are the whole input, and the default shallow checkout has none.
+      # This job only reads the picker script, so take the cheap checkout: no
+      # blobs (filter), no other files (sparse). Release tags come explicitly
+      # from upstream because this fork does not maintain its own releases.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           filter: blob:none
-          fetch-tags: true
           sparse-checkout: scripts/sandbox/pick-release-tags.sh
           sparse-checkout-cone-mode: false
       - id: pick
         run: |
           set -euo pipefail
-          tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
+          tags="$(scripts/sandbox/pick-release-tags.sh \
+            --remote 'https://github.com/NousResearch/hermes-agent.git' \
+            --count '${{ inputs.tag-count || 5 }}')"
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
