@@ -24,6 +24,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import time
 from urllib.parse import unquote, urlsplit
 
 ROOT, CERTS, REAL_CA = map(pathlib.Path, sys.argv[1:])
@@ -31,6 +32,8 @@ ROOT, CERTS, REAL_CA = map(pathlib.Path, sys.argv[1:])
 LISTEN_ADDRESS = ('127.0.0.1', 8080)
 MAX_REQUEST_BYTES = 65536
 UPSTREAM_TIMEOUT_SECONDS = 30
+UPSTREAM_RETRIES = 3
+UPSTREAM_RETRY_DELAY_SECONDS = 1.0
 CERT_VALIDITY_DAYS = 2
 
 
@@ -152,10 +155,25 @@ def relay(source, destination):
 
 def forward_https(conn, host, port, request):
     context = ssl.create_default_context(cafile=str(REAL_CA))
-    with socket.create_connection((host, port), timeout=UPSTREAM_TIMEOUT_SECONDS) as raw:
-        with context.wrap_socket(raw, server_hostname=host) as upstream:
-            upstream.sendall(close_request(request))
-            relay(upstream, conn)
+    for attempt in range(1, UPSTREAM_RETRIES + 1):
+        try:
+            with socket.create_connection((host, port), timeout=UPSTREAM_TIMEOUT_SECONDS) as raw:
+                with context.wrap_socket(raw, server_hostname=host) as upstream:
+                    upstream.sendall(close_request(request))
+                    relay(upstream, conn)
+            return
+        except (ConnectionError, TimeoutError, ssl.SSLError) as error:
+            last_error = error
+            if attempt == UPSTREAM_RETRIES:
+                raise
+            print(
+                f'upstream HTTPS retry {attempt}/{UPSTREAM_RETRIES - 1} '
+                f'for {host}:{port}: {error!r}',
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(UPSTREAM_RETRY_DELAY_SECONDS * attempt)
+    raise RuntimeError(f'upstream HTTPS failed for {host}:{port}')  # pragma: no cover
 
 
 def forward_http(conn, host, port, request, target):
