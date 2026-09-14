@@ -172,10 +172,10 @@ def handle_connect(conn, target):
     """Intercept a CONNECT tunnel, terminating TLS with a minted cert."""
     host, _, port_text = target.rpartition(':')
     port = int(port_text or '443')
-    conn.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
     cert, key = cert_for(host)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
+    conn.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
     with context.wrap_socket(conn, server_side=True) as tls:
         nested = read_request(tls)
         if not nested:
